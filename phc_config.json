@@ -1,0 +1,11 @@
+{
+    "simulation_hours": 8,
+    "service_rate": 3,
+    "random_seed": 42,
+    "phcs": [
+        {"name": "PHC_A", "staff": 6, "arrival_rate": 10},
+        {"name": "PHC_B", "staff": 4, "arrival_rate": 7},
+        {"name": "PHC_C", "staff": 2, "arrival_rate": 4},
+        {"name": "PHC_D", "staff": 2, "arrival_rate": 5}
+    ]
+}
