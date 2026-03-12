@@ -19,7 +19,7 @@ class PHC:
     """
 
     def __init__(self, env, name, staff, arrival_rate, service_rate):
-        self.env = env
+        self.env = env # Environment Clock
         self.name = name
         self.arrival_rate = arrival_rate
         self.service_rate = service_rate
