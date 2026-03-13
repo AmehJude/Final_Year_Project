@@ -7,5 +7,14 @@
         {"name": "PHC_B", "staff": 4, "arrival_rate": 7},
         {"name": "PHC_C", "staff": 2, "arrival_rate": 4},
         {"name": "PHC_D", "staff": 2, "arrival_rate": 5}
-    ]
+    ],
+    "surge": {
+        "enabled": true,
+        "start_hour": 3,
+        "duration_hours": 2,
+        "affected_phcs": {
+            "PHC_A": 2.0,
+            "PHC_D": 1.8
+        }
+    }
 }
