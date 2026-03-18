@@ -8,14 +8,20 @@ class PHC:
     wait in queue, and are served by available staff.
 
     Attributes:
-        env:              SimPy environment for discrete event simulation
-        name:             PHC identifier (e.g., 'PHC_A')
-        arrival_rate:     Patient arrival rate (patients/hour)
-        service_rate:     Service rate per staff member (patients/hour)
-        resource:         SimPy Resource representing staff capacity
-        patients_arrived: Total patients who entered the system
-        patients_served:  Patients who completed service
-        waiting_times:    List of waiting times (hours) for served patients
+        env:                    SimPy environment for discrete event simulation
+        name:                   PHC identifier (e.g., 'PHC_A')
+        staff:                  Number of staff members at this PHC
+        arrival_rate:           Patient arrival rate (patients/hour)
+        service_rate:           Service rate per staff member (patients/hour)
+        surge_multiplier:       Factor by which arrival rate increases during surge
+        surge_start:            Simulation hour when surge begins (None if no surge)
+        surge_end:              Simulation hour when surge ends (None if no surge)
+        resource:               SimPy Resource representing staff capacity
+        patients_arrived:       Total patients who entered the system
+        patients_served:        Patients who completed service
+        waiting_times:          List of waiting times (hours) for all served patients
+        surge_patients_arrived: Patients who arrived specifically during surge window
+        waiting_times_surge:    Waiting times for patients who arrived during surge
     """
 
     def __init__(self, env, name, staff, arrival_rate, service_rate,
@@ -31,6 +37,9 @@ class PHC:
         self.surge_multiplier = surge_multiplier
         self.surge_start      = surge_start
         self.surge_end        = surge_end
+
+        # Store staff count directly so the monitor and other modules can read it
+        self.staff = staff
 
         # SimPy Resource — capacity equals number of staff
         # Only this many patients can be in service simultaneously
@@ -56,7 +65,7 @@ class PHC:
     def patient(self, arrived_during_surge=False):
         """SimPy generator process representing one patient's journey.
 
-        Flow: arrival → join queue → wait for staff → receive service → depart
+        Flow: arrival -> join queue -> wait for staff -> receive service -> depart
 
         Args:
             arrived_during_surge: Whether this patient arrived during a surge.
@@ -64,11 +73,11 @@ class PHC:
         """
         arrival_time = self.env.now
 
-        # Request a staff member — patient waits here if all staff are busy
+        # Request a staff member -- patient waits here if all staff are busy
         with self.resource.request() as request:
             yield request
 
-            # Staff is now free — calculate how long the patient waited
+            # Staff is now free -- calculate how long the patient waited
             wait = self.env.now - arrival_time
             self.waiting_times.append(wait)
 
@@ -96,7 +105,7 @@ class PHC:
         """
         while True:
             # Determine the current arrival rate based on surge status
-            # During a surge the rate is multiplied — more patients per hour
+            # During a surge the rate is multiplied -- more patients per hour
             surge_active = self._is_surge_active()
 
             if surge_active:

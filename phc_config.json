@@ -16,5 +16,9 @@
             "PHC_A": 2.0,
             "PHC_D": 1.8
         }
+    },
+    "monitoring": {
+        "check_interval_minutes": 30,
+        "overload_threshold": 0.85
     }
 }
