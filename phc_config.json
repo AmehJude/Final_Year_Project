@@ -20,5 +20,11 @@
     "monitoring": {
         "check_interval_minutes": 30,
         "overload_threshold": 0.85
+    },
+    "coordination": {
+        "enabled": true,
+        "travel_time_hours": 0.5,
+        "safety_utilization": 0.75,
+        "check_interval_minutes": 30
     }
 }

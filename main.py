@@ -2,16 +2,17 @@ import simpy
 import random
 import json
 
-from phc_model import PHC
-from monitor  import SystemMonitor
+from phc_model    import PHC
+from monitor      import SystemMonitor
+from coordinator  import CoordinationEngine
 
 
 def load_config(filepath="phc_config.json"):
-
+    """Load simulation configuration from a JSON file.
+    """
     with open(filepath, "r") as file:
         config = json.load(file)
 
-    # Validate that required top-level keys exist
     required_keys = ["simulation_hours", "service_rate", "phcs"]
     for key in required_keys:
         if key not in config:
@@ -21,15 +22,20 @@ def load_config(filepath="phc_config.json"):
 
 
 def run_simulation(config_path="phc_config.json"):
+    """Run the PHC discrete-event simulation.
 
-    #  Load configuration 
+    Loads PHC network configuration from JSON, builds the simulation
+    dynamically, runs it, and prints performance metrics per PHC.
+    Supports surge simulation, system monitoring, and coordination.
+    """
+    # --- Load configuration ---
     config       = load_config(config_path)
     SIM_HOURS    = config["simulation_hours"]
     SERVICE_RATE = config["service_rate"]
     PHC_LIST     = config["phcs"]
     SEED         = config.get("random_seed", 42)
 
-    #  Load surge configuration if present 
+    # --- Load surge configuration ---
     surge_config   = config.get("surge", {})
     surge_enabled  = surge_config.get("enabled", False)
     surge_start    = surge_config.get("start_hour", None)
@@ -37,18 +43,24 @@ def run_simulation(config_path="phc_config.json"):
     surge_end      = (surge_start + surge_duration) if surge_enabled else None
     affected_phcs  = surge_config.get("affected_phcs", {})
 
-    #  Load monitoring configuration 
+    # --- Load monitoring configuration ---
     monitor_config     = config.get("monitoring", {})
     check_interval_min = monitor_config.get("check_interval_minutes", 30)
     overload_threshold = monitor_config.get("overload_threshold", 0.85)
-
-    # Convert check interval from minutes to hours (simulation runs in hours)
     check_interval_hrs = check_interval_min / 60
+
+    # --- Load coordination configuration ---
+    coord_config       = config.get("coordination", {})
+    coord_enabled      = coord_config.get("enabled", False)
+    travel_time        = coord_config.get("travel_time_hours", 0.5)
+    safety_util        = coord_config.get("safety_utilization", 0.75)
+    coord_interval_min = coord_config.get("check_interval_minutes", 30)
+    coord_interval_hrs = coord_interval_min / 60
 
     # Set random seed for reproducibility
     random.seed(SEED)
 
-    #  Build simulation environment 
+    # --- Build simulation environment ---
     env = simpy.Environment()
     phc_objects = {}
 
@@ -57,8 +69,6 @@ def run_simulation(config_path="phc_config.json"):
         staff        = phc_data["staff"]
         arrival_rate = phc_data["arrival_rate"]
 
-        # Check if this PHC is affected by the surge
-        # If not in affected_phcs, multiplier defaults to 1.0 (no change)
         surge_multiplier = affected_phcs.get(name, 1.0) if surge_enabled else 1.0
 
         phc = PHC(
@@ -70,9 +80,7 @@ def run_simulation(config_path="phc_config.json"):
         phc_objects[name] = phc
         env.process(phc.arrival_process())
 
-    #  Build and register the system monitor 
-    # The monitor is created after all PHCs exist so it can watch all of them
-    # It is registered as a SimPy process so it runs alongside the simulation
+    # --- Build and register the system monitor ---
     monitor = SystemMonitor(
         env                = env,
         phc_objects        = phc_objects,
@@ -82,16 +90,30 @@ def run_simulation(config_path="phc_config.json"):
     )
     env.process(monitor.run())
 
-    #  Run simulation 
-    # Run past SIM_HOURS to allow in-progress patients to finish
+    # --- Build and register the coordination engine (if enabled) ---
+    coordinator = None
+    if coord_enabled:
+        coordinator = CoordinationEngine(
+            env                = env,
+            phc_objects        = phc_objects,
+            service_rate       = SERVICE_RATE,
+            overload_threshold = overload_threshold,
+            travel_time        = travel_time,
+            check_interval     = coord_interval_hrs,
+            safety_utilization = safety_util
+        )
+        env.process(coordinator.run())
+
+    # --- Run simulation ---
     env.run(until=SIM_HOURS + 2)
 
-    #  Print PHC results 
+    # --- Print PHC results ---
     surge_label = (f"Surge: Hour {surge_start}-{surge_end}"
                    if surge_enabled else "No Surge")
+    coord_label = "Coordination: ON" if coord_enabled else "Coordination: OFF"
 
     print(f"\n{'='*70}")
-    print(f"  PHC SIMULATION RESULTS  |  Duration: {SIM_HOURS}h  |  {surge_label}")
+    print(f"  PHC SIMULATION RESULTS  |  {surge_label}  |  {coord_label}")
     print(f"{'='*70}")
     print(f"{'PHC':<10} {'Arrived':>8} {'Served':>8} {'Avg Wait':>11} "
           f"{'Util':>7} {'Complete':>10}")
@@ -106,16 +128,13 @@ def run_simulation(config_path="phc_config.json"):
         print(f"{name:<10} {phc.patients_arrived:>8} {phc.patients_served:>8} "
               f"{avg_wait_min:>9.1f}m {utilization:>7.2f} {completion_rate:>9.1f}%")
 
-        # If this PHC was surge-affected, print additional surge breakdown
         if surge_enabled and name in affected_phcs:
             multiplier = affected_phcs[name]
             surge_rate = phc.arrival_rate * multiplier
-
-            if phc.waiting_times_surge:
-                avg_surge_wait = sum(phc.waiting_times_surge) / len(phc.waiting_times_surge) * 60
-            else:
-                avg_surge_wait = 0
-
+            avg_surge_wait = (
+                sum(phc.waiting_times_surge) / len(phc.waiting_times_surge) * 60
+                if phc.waiting_times_surge else 0
+            )
             print(f"  >> SURGE AFFECTED  |  Multiplier: x{multiplier}"
                   f"  |  Surge rate: {surge_rate:.0f} pts/hr"
                   f"  |  Surge arrivals: {phc.surge_patients_arrived}"
@@ -123,8 +142,12 @@ def run_simulation(config_path="phc_config.json"):
 
     print(f"{'='*70}")
 
-    #  Print monitor summary 
+    # --- Print monitor summary ---
     monitor.print_summary()
+
+    # --- Print coordination summary ---
+    if coordinator:
+        coordinator.print_summary()
 
 
 if __name__ == "__main__":
