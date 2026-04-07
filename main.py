@@ -21,12 +21,31 @@ def load_config(filepath="phc_config.json"):
     return config
 
 
-def run_simulation(config_path="phc_config.json"):
+def run_simulation(config_path="phc_config.json",
+                   surge_override=None,
+                   coord_override=None,
+                   silent=False):
     """Run the PHC discrete-event simulation.
 
     Loads PHC network configuration from JSON, builds the simulation
-    dynamically, runs it, and prints performance metrics per PHC.
-    Supports surge simulation, system monitoring, and coordination.
+    dynamically, runs it, prints performance metrics, and returns
+    structured results for use by the experiment runner.
+
+    Args:
+        config_path:    Path to the JSON configuration file.
+        surge_override: If provided (True/False), overrides the surge
+                        enabled setting in the config. Used by the
+                        experiment runner to control scenarios without
+                        editing the JSON file.
+        coord_override: If provided (True/False), overrides the
+                        coordination enabled setting in the config.
+        silent:         If True, suppresses all printed output.
+                        Used by the experiment runner which handles
+                        its own output formatting.
+
+    Returns:
+        dict: Structured results containing per-PHC metrics, monitor
+              log, overload events, and redeployment log.
     """
     # --- Load configuration ---
     config       = load_config(config_path)
@@ -43,6 +62,13 @@ def run_simulation(config_path="phc_config.json"):
     surge_end      = (surge_start + surge_duration) if surge_enabled else None
     affected_phcs  = surge_config.get("affected_phcs", {})
 
+    # Apply override if the experiment runner passed one in
+    if surge_override is not None:
+        surge_enabled = surge_override
+        if not surge_enabled:
+            surge_start = None
+            surge_end   = None
+
     # --- Load monitoring configuration ---
     monitor_config     = config.get("monitoring", {})
     check_interval_min = monitor_config.get("check_interval_minutes", 30)
@@ -57,7 +83,11 @@ def run_simulation(config_path="phc_config.json"):
     coord_interval_min = coord_config.get("check_interval_minutes", 30)
     coord_interval_hrs = coord_interval_min / 60
 
-    # Set random seed for reproducibility
+    # Apply override if the experiment runner passed one in
+    if coord_override is not None:
+        coord_enabled = coord_override
+
+    # Set random seed — same seed for every scenario ensures fair comparison
     random.seed(SEED)
 
     # --- Build simulation environment ---
@@ -107,47 +137,76 @@ def run_simulation(config_path="phc_config.json"):
     # --- Run simulation ---
     env.run(until=SIM_HOURS + 2)
 
-    # --- Print PHC results ---
-    surge_label = (f"Surge: Hour {surge_start}-{surge_end}"
-                   if surge_enabled else "No Surge")
-    coord_label = "Coordination: ON" if coord_enabled else "Coordination: OFF"
-
-    print(f"\n{'='*70}")
-    print(f"  PHC SIMULATION RESULTS  |  {surge_label}  |  {coord_label}")
-    print(f"{'='*70}")
-    print(f"{'PHC':<10} {'Arrived':>8} {'Served':>8} {'Avg Wait':>11} "
-          f"{'Util':>7} {'Complete':>10}")
-    print(f"{'-'*70}")
-
+    # --- Collect structured results ---
+    # This is what gets returned to the experiment runner
+    phc_results = {}
     for name, phc in phc_objects.items():
         avg_wait        = sum(phc.waiting_times) / len(phc.waiting_times) if phc.waiting_times else 0
-        avg_wait_min    = avg_wait * 60
-        completion_rate = (phc.patients_served / phc.patients_arrived * 100) if phc.patients_arrived > 0 else 0
-        utilization     = phc.arrival_rate / (phc.staff * SERVICE_RATE)
+        avg_wait_min    = round(avg_wait * 60, 2)
+        completion_rate = round((phc.patients_served / phc.patients_arrived * 100)
+                                if phc.patients_arrived > 0 else 0, 1)
+        utilization     = round(phc.arrival_rate / (phc.staff * SERVICE_RATE), 2)
 
-        print(f"{name:<10} {phc.patients_arrived:>8} {phc.patients_served:>8} "
-              f"{avg_wait_min:>9.1f}m {utilization:>7.2f} {completion_rate:>9.1f}%")
-
-        if surge_enabled and name in affected_phcs:
-            multiplier = affected_phcs[name]
-            surge_rate = phc.arrival_rate * multiplier
-            avg_surge_wait = (
-                sum(phc.waiting_times_surge) / len(phc.waiting_times_surge) * 60
-                if phc.waiting_times_surge else 0
+        avg_surge_wait = 0
+        if surge_enabled and phc.waiting_times_surge:
+            avg_surge_wait = round(
+                sum(phc.waiting_times_surge) / len(phc.waiting_times_surge) * 60, 2
             )
-            print(f"  >> SURGE AFFECTED  |  Multiplier: x{multiplier}"
-                  f"  |  Surge rate: {surge_rate:.0f} pts/hr"
-                  f"  |  Surge arrivals: {phc.surge_patients_arrived}"
-                  f"  |  Surge avg wait: {avg_surge_wait:.1f}m")
 
-    print(f"{'='*70}")
+        phc_results[name] = {
+            "patients_arrived"      : phc.patients_arrived,
+            "patients_served"       : phc.patients_served,
+            "avg_wait_min"          : avg_wait_min,
+            "utilization"           : utilization,
+            "completion_rate"       : completion_rate,
+            "surge_patients_arrived": phc.surge_patients_arrived,
+            "avg_surge_wait_min"    : avg_surge_wait
+        }
 
-    # --- Print monitor summary ---
-    monitor.print_summary()
+    results = {
+        "scenario": {
+            "surge_enabled": surge_enabled,
+            "coord_enabled": coord_enabled,
+            "seed"         : SEED
+        },
+        "phc_results"     : phc_results,
+        "monitor_log"     : monitor.log,
+        "overload_events" : monitor.overload_events,
+        "redeployments"   : coordinator.redeployment_log if coordinator else []
+    }
 
-    # --- Print coordination summary ---
-    if coordinator:
-        coordinator.print_summary()
+    # --- Print output (skipped when called from experiment runner) ---
+    if not silent:
+        surge_label = (f"Surge: Hour {surge_start}-{surge_end}"
+                       if surge_enabled else "No Surge")
+        coord_label = "Coordination: ON" if coord_enabled else "Coordination: OFF"
+
+        print(f"\n{'='*70}")
+        print(f"  PHC SIMULATION RESULTS  |  {surge_label}  |  {coord_label}")
+        print(f"{'='*70}")
+        print(f"{'PHC':<10} {'Arrived':>8} {'Served':>8} {'Avg Wait':>11} "
+              f"{'Util':>7} {'Complete':>10}")
+        print(f"{'-'*70}")
+
+        for name, r in phc_results.items():
+            print(f"{name:<10} {r['patients_arrived']:>8} {r['patients_served']:>8} "
+                  f"{r['avg_wait_min']:>9.1f}m {r['utilization']:>7.2f} "
+                  f"{r['completion_rate']:>9.1f}%")
+
+            if surge_enabled and name in affected_phcs:
+                multiplier = affected_phcs[name]
+                surge_rate = phc_objects[name].arrival_rate * multiplier
+                print(f"  >> SURGE AFFECTED  |  Multiplier: x{multiplier}"
+                      f"  |  Surge rate: {surge_rate:.0f} pts/hr"
+                      f"  |  Surge arrivals: {r['surge_patients_arrived']}"
+                      f"  |  Surge avg wait: {r['avg_surge_wait_min']:.1f}m")
+
+        print(f"{'='*70}")
+        monitor.print_summary()
+        if coordinator:
+            coordinator.print_summary()
+
+    return results
 
 
 if __name__ == "__main__":

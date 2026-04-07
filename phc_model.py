@@ -2,8 +2,7 @@ import simpy
 import random
 
 class PHC:
-    """
-    Attributes:
+    """Attributes:
         env:                    SimPy environment for discrete event simulation
         name:                   PHC identifier (e.g., 'PHC_A')
         staff:                  Number of staff members at this PHC
@@ -27,7 +26,7 @@ class PHC:
         self.arrival_rate = arrival_rate      # Base arrival rate (patients/hour)
         self.service_rate = service_rate
 
-        # Surge parameters, defaults mean no surge behaviour
+        # Surge parameters — defaults mean no surge behaviour
         # surge_multiplier: how many times busier the PHC gets during the surge
         # surge_start/end: simulation hours when the surge begins and ends
         self.surge_multiplier = surge_multiplier
@@ -91,14 +90,6 @@ class PHC:
             self.patients_served += 1
 
     def arrival_process(self):
-        """SimPy generator process that continuously generates patient arrivals.
-
-        Flow:
-        - Checks whether a surge is currently active
-        - Uses the appropriate arrival rate (base or surge)
-        - Waits the inter-arrival gap
-        - Spawns a new patient process
-        """
         while True:
             # Determine the current arrival rate based on surge status
             # During a surge the rate is multiplied -- more patients per hour

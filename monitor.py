@@ -5,6 +5,14 @@ class SystemMonitor:
     every PHC, logs a snapshot, and flags any PHC that meets the
     composite overload condition.
 
+    Composite overload condition:
+        live_utilization >= overload_threshold AND queue_length >= 2
+
+    Both conditions must be true simultaneously. Utilization alone
+    is insufficient -- all staff being busy is normal. A genuine
+    overload requires staff to be stretched AND patients visibly
+    piling up in the queue.
+
     Attributes:
         env:                SimPy environment
         phc_objects:        Dictionary of all PHC objects being monitored
@@ -40,12 +48,18 @@ class SystemMonitor:
         """Evaluate the composite overload condition.
 
         Both conditions must be true:
-        - Staff utilization is at or above the threshold
-        - At least 2 patients are waiting in the queue
+          1. Staff utilization is at or above the threshold
+          2. At least 2 patients are waiting in the queue
 
         A single patient waiting could be momentary noise.
         Two or more indicates a genuine, building backlog.
 
+        Args:
+            live_utilization: Current fraction of staff in use
+            queue_length:     Number of patients currently waiting
+
+        Returns:
+            bool: True if both overload conditions are met
         """
         return live_utilization >= self.overload_threshold and queue_length >= 2
 
